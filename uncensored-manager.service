@@ -1,0 +1,16 @@
+[Unit]
+Description=Uncensored / Obliterated AI Engine Manager & Local Bridge
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/uncensored-manager
+ExecStart=/usr/bin/python3 /root/uncensored-manager/app.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
