@@ -238,7 +238,11 @@ async def list_models():
             pass
 
     for m in MODELS.values():
-        ctx = live_ctx if (m["id"] == manager.active_model_id and live_ctx) else m.get("context_length", 32768)
+        reg_ctx = m.get("context_length", 262144)
+        if m["id"] == manager.active_model_id and live_ctx:
+            ctx = max(live_ctx, reg_ctx, 65536)
+        else:
+            ctx = max(reg_ctx, 65536)
         data.append({
             "id": m["id"],
             "object": "model",
@@ -267,7 +271,8 @@ async def get_props():
         except Exception:
             pass
     active_m = MODELS.get(manager.active_model_id, {})
-    ctx = active_m.get("context_length", 32768)
+    reg_ctx = active_m.get("context_length", 262144)
+    ctx = max(reg_ctx, 65536)
     return {
         "default_generation_settings": {"n_ctx": ctx},
         "model_alias": manager.active_model_id,
