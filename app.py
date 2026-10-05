@@ -227,7 +227,18 @@ app_forwarder.add_middleware(
 @app_forwarder.get("/models")
 async def list_models():
     data = []
+    live_ctx = None
+    if manager.tunnel_url:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                r = await client.get(f"{manager.tunnel_url}/props")
+                if r.status_code == 200:
+                    live_ctx = (r.json().get("default_generation_settings") or {}).get("n_ctx")
+        except Exception:
+            pass
+
     for m in MODELS.values():
+        ctx = live_ctx if (m["id"] == manager.active_model_id and live_ctx) else m.get("context_length", 32768)
         data.append({
             "id": m["id"],
             "object": "model",
@@ -235,9 +246,33 @@ async def list_models():
             "owned_by": "kaggle-uncensored",
             "permission": [],
             "root": m["id"],
-            "parent": None
+            "parent": None,
+            "context_length": ctx,
+            "context_window": ctx,
+            "max_model_len": ctx,
+            "max_context_length": ctx,
+            "max_position_embeddings": ctx
         })
     return {"object": "list", "data": data}
+
+@app_forwarder.get("/props")
+@app_forwarder.get("/v1/props")
+async def get_props():
+    if manager.tunnel_url:
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                r = await client.get(f"{manager.tunnel_url}/props")
+                if r.status_code == 200:
+                    return r.json()
+        except Exception:
+            pass
+    active_m = MODELS.get(manager.active_model_id, {})
+    ctx = active_m.get("context_length", 32768)
+    return {
+        "default_generation_settings": {"n_ctx": ctx},
+        "model_alias": manager.active_model_id,
+        "n_ctx": ctx
+    }
 
 @app_forwarder.get("/health")
 @app_forwarder.get("/v1/health")
