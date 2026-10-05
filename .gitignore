@@ -23,6 +23,7 @@ wheels/
 
 # Kernel execution outputs and local weights
 kernel_output/
+stop_bundle/
 
 # Logs and runtime databases
 *.log

@@ -276,6 +276,82 @@
     .log-box::-webkit-scrollbar { width: 4px; }
     .log-box::-webkit-scrollbar-track { background: transparent; }
     .log-box::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 4px; }
+
+    /* Stop Button (SynthiQ Red/Amber accent) */
+    .syn-btn-stop {
+      background: rgba(251, 113, 133, 0.12);
+      border: 1px solid rgba(251, 113, 133, 0.35);
+      color: var(--bad);
+      font-weight: 600;
+      border-radius: 8px;
+      padding: 9px 14px;
+      font-size: 13px;
+      transition: all 0.15s ease;
+      cursor: pointer;
+    }
+    .syn-btn-stop:hover:not(:disabled) {
+      background: rgba(251, 113, 133, 0.22);
+      border-color: var(--bad);
+      box-shadow: 0 0 12px rgba(251, 113, 133, 0.25);
+    }
+    .syn-btn-stop:active:not(:disabled) { transform: scale(0.98); }
+    .syn-btn-stop:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+      border-color: var(--line);
+      color: var(--muted);
+      background: var(--surface-2);
+      box-shadow: none;
+    }
+
+    /* Output Box with Clean Adaptive Theme */
+    .syn-output-box {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11.5px;
+      line-height: 1.5;
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      color: var(--text);
+      max-height: 144px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+    }
+
+    /* Bottom Specs / Memory Bar */
+    .syn-specs-bar {
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px 16px;
+      transition: background 0.2s ease, border-color 0.2s ease;
+    }
+
+    /* Model Cards Grid */
+    .syn-model-card {
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      transition: all 0.2s ease;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .syn-model-card:hover {
+      border-color: var(--line-strong);
+      transform: translateY(-1px);
+    }
+    .syn-model-card.selected {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent);
+    }
+    .syn-model-card.running {
+      border-color: var(--ok);
+      box-shadow: 0 0 0 1px var(--ok);
+    }
   </style>
 </head>
 <body class="p-3 sm:p-6 max-w-7xl mx-auto">
@@ -412,7 +488,13 @@
               <svg class="w-4 h-4 stroke-current" fill="none" stroke-width="2" viewBox="0 0 24 24">
                 <polygon points="5 3 19 12 5 21 5 3"></polygon>
               </svg>
-              <span id="launchBtnText">Launch on Kaggle</span>
+              <span id="launchBtnText">Launch Model</span>
+            </button>
+            <button onclick="stopKernel()" id="stopBtn" class="syn-btn-stop px-3 flex items-center justify-center gap-1.5" title="Stop Engine & Release Kaggle GPU Quota" disabled>
+              <svg class="w-4 h-4 stroke-current" fill="none" stroke-width="2" viewBox="0 0 24 24">
+                <rect x="5" y="5" width="14" height="14" rx="2" ry="2"></rect>
+              </svg>
+              <span id="stopBtnText">Stop Engine</span>
             </button>
             <button onclick="resetKernel()" id="resetBtn" class="syn-btn-secondary px-3" title="Reset State">
               <svg class="w-4 h-4 stroke-current" fill="none" stroke-width="2" viewBox="0 0 24 24">
@@ -556,7 +638,7 @@
             </button>
           </div>
 
-          <div id="testOutputBox" class="bg-[#04060b] [data-theme='light'] &bg-[#f1f4f9] border border-[var(--line)] rounded-lg p-2.5 font-mono text-xs text-[#94a3b8] [data-theme='light'] &text-[#334155] max-h-36 overflow-y-auto whitespace-pre-wrap">Awaiting prompt submission...</div>
+          <div id="testOutputBox" class="syn-output-box">Awaiting prompt submission...</div>
         </div>
       </section>
 
@@ -595,10 +677,95 @@
 
   </main>
 
+  <!-- Available Models Selection Grid -->
+  <section class="syn-card mt-4">
+    <div class="flex items-center justify-between mb-3 pb-2 border-b border-[var(--line)]">
+      <div class="flex items-center gap-2">
+        <h2 class="text-xs uppercase font-semibold text-[var(--muted)] tracking-wider flex items-center gap-1.5">
+          <svg class="w-4 h-4 stroke-current" fill="none" stroke-width="2" viewBox="0 0 24 24">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+            <line x1="8" y1="21" x2="16" y2="21"></line>
+            <line x1="12" y1="17" x2="12" y2="21"></line>
+          </svg>
+          Available Models
+        </h2>
+        <span class="pill pill-info text-[10px]">Dual T4 Optimized</span>
+      </div>
+      <span class="text-xs text-[var(--muted)]">Click any card to select &amp; enable Launch Model</span>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3" id="availableModelsGrid">
+      <!-- Populated dynamically via JS -->
+    </div>
+  </section>
+
+  <!-- Bottom Specs & Memory Bar -->
+  <footer class="syn-specs-bar mt-4">
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+      <div class="flex items-center gap-3 flex-wrap">
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-[var(--ok)]"></span>
+          <span class="font-semibold text-[var(--text)]">Dual Tesla T4</span>
+          <span class="text-[var(--muted)] font-mono">(32 GB GDDR6 &middot; PCIe 3.0 x16)</span>
+        </div>
+        <span class="text-[var(--line-strong)] hidden sm:inline">&vert;</span>
+        <div class="flex items-center gap-1.5">
+          <span class="text-[var(--muted)]">VRAM Pool:</span>
+          <span id="bottomVramDemand" class="font-mono text-[var(--accent)] font-medium">24.8 GB / 32 GB</span>
+        </div>
+        <span class="text-[var(--line-strong)] hidden sm:inline">&vert;</span>
+        <div class="flex items-center gap-1.5">
+          <span class="text-[var(--muted)]">Context Window:</span>
+          <span id="bottomContextLength" class="font-mono text-[var(--accent)] font-semibold">262,144 tokens (YaRN scale 8)</span>
+        </div>
+        <span class="text-[var(--line-strong)] hidden sm:inline">&vert;</span>
+        <div class="flex items-center gap-1.5">
+          <span class="text-[var(--muted)]">KV Cache:</span>
+          <span id="bottomKvCache" class="font-mono text-[var(--text)] font-medium">q4_0 / q4_0 (-np 1 single slot)</span>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 text-[var(--muted)] text-[11px] font-mono">
+        <span>Pipeline: <span class="text-[var(--text)]">-sm layer -ts 1,1</span></span>
+        <span>&middot;</span>
+        <span>Bridge: <span class="text-[var(--text)]">8776</span></span>
+      </div>
+    </div>
+  </footer>
+
   <!-- Script logic -->
   <script>
-    let activeState = {};
+    // ── Global State & Timer ────────────────────────────────────
+    let activeState = null;
     let modelSpecs = {};
+    let launchEpochMs = null;
+    let isEngineActive = false;
+    let currentSelectedModelId = 'cybertiel-coder-35b-a3b';
+
+    function formatElapsed(totalSec) {
+      if (totalSec < 0) totalSec = 0;
+      const h = Math.floor(totalSec / 3600);
+      const m = Math.floor((totalSec % 3600) / 60);
+      const s = totalSec % 60;
+      if (h > 0) {
+        return `${h}h ${m}m ${s}s`;
+      } else if (m > 0) {
+        return `${m}m ${s}s`;
+      } else {
+        return `${s}s`;
+      }
+    }
+
+    function tickLiveTimer() {
+      const badge = document.getElementById('elapsedBadge');
+      if (!badge) return;
+      if (!isEngineActive || !launchEpochMs) {
+        badge.innerText = '0s';
+        return;
+      }
+      const now = Date.now();
+      const elapsedSec = Math.floor((now - launchEpochMs) / 1000);
+      badge.innerText = formatElapsed(elapsedSec);
+    }
 
     // ── SynthiQ Theme Handling ──────────────────────────────────
     function setTheme(name) {
@@ -637,6 +804,7 @@
     });
 
     function selectModelOption(id, name) {
+      currentSelectedModelId = id;
       document.getElementById('modelSelectVal').value = id;
       document.getElementById('modelDropdownLabel').innerText = name;
       document.getElementById('modelDropdownWrap').classList.remove('open');
@@ -646,6 +814,10 @@
       });
 
       updateSpecDetails(id);
+      if (activeState) {
+        updateLaunchAndStopButtons(activeState);
+        renderModelCards(activeState);
+      }
       fetch('/api/model/select', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -663,6 +835,116 @@
       });
 
       document.getElementById('customProxyWrap').style.display = val === 'custom' ? 'block' : 'none';
+    }
+
+    function updateLaunchAndStopButtons(data) {
+      const launchBtn = document.getElementById('launchBtn');
+      const launchBtnText = document.getElementById('launchBtnText');
+      const stopBtn = document.getElementById('stopBtn');
+      
+      const status = (data.status || 'idle').toLowerCase();
+      const isRunning = (status === 'ready' || status === 'running');
+      const isDeploying = (status === 'initializing' || status === 'downloading' || status === 'loading_vram');
+      const isSelectedModelRunning = isRunning && (currentSelectedModelId === data.active_model_id);
+
+      // Stop button enabled if running or deploying
+      if (stopBtn) {
+        stopBtn.disabled = !(isRunning || isDeploying);
+      }
+
+      // Launch button state
+      if (launchBtn && launchBtnText) {
+        if (isDeploying) {
+          launchBtn.disabled = true;
+          launchBtn.classList.add('opacity-50', 'cursor-not-allowed');
+          launchBtnText.innerText = 'Deploying...';
+        } else if (isSelectedModelRunning) {
+          launchBtn.disabled = true;
+          launchBtn.classList.add('opacity-50', 'cursor-not-allowed');
+          launchBtnText.innerText = 'Active (Running)';
+        } else {
+          launchBtn.disabled = false;
+          launchBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+          launchBtnText.innerText = 'Launch Model';
+        }
+      }
+    }
+
+    function renderModelCards(data) {
+      const grid = document.getElementById('availableModelsGrid');
+      if (!grid || !data.available_models) return;
+
+      const status = (data.status || 'idle').toLowerCase();
+      const isRunning = (status === 'ready' || status === 'running');
+
+      let html = '';
+      data.available_models.forEach(m => {
+        modelSpecs[m.id] = m;
+        const isThisRunning = isRunning && (m.id === data.active_model_id);
+        const isSelected = (m.id === currentSelectedModelId);
+
+        let cardClass = 'syn-model-card';
+        if (isThisRunning) cardClass += ' running';
+        else if (isSelected) cardClass += ' selected';
+
+        let badgeHtml = '';
+        if (isThisRunning) {
+          badgeHtml = '<span class="pill pill-ok text-[10px]"><span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>Running</span>';
+        } else if (isSelected) {
+          badgeHtml = '<span class="pill pill-info text-[10px]">Selected</span>';
+        } else {
+          badgeHtml = '<span class="pill pill-neutral text-[10px]">Standby</span>';
+        }
+
+        let actionBtnHtml = '';
+        if (isThisRunning) {
+          actionBtnHtml = `<button class="syn-btn-secondary w-full text-xs py-1.5 opacity-50 cursor-not-allowed font-medium" disabled title="Model is currently active and running on Kaggle">Running</button>`;
+        } else if (isSelected) {
+          actionBtnHtml = `<button onclick="launchKernel()" class="syn-btn-primary w-full text-xs py-1.5 font-semibold cursor-pointer" title="Launch ${escapeHtml(m.name)} on Kaggle">Launch Model</button>`;
+        } else {
+          actionBtnHtml = `<button onclick="selectModelOption('${m.id}', '${escapeHtml(m.name)}')" class="syn-btn-secondary w-full text-xs py-1.5 font-medium cursor-pointer hover:border-[var(--accent)]">Select Model</button>`;
+        }
+
+        const ctx = m.context_display || (m.context_length ? (m.context_length.toLocaleString() + ' tok') : '32k');
+
+        html += `
+          <div class="${cardClass}" onclick="if(!event.target.closest('button')) selectModelOption('${m.id}', '${escapeHtml(m.name)}')">
+            <div>
+              <div class="flex items-start justify-between gap-1.5 mb-1.5">
+                <span class="font-semibold text-xs text-[var(--text)] leading-tight">${escapeHtml(m.name)}</span>
+                <div class="flex items-center gap-1 shrink-0">
+                  <span class="pill pill-neutral text-[9px] font-mono">Rank ${m.rank || '-'}</span>
+                  ${badgeHtml}
+                </div>
+              </div>
+              <p class="text-[11px] text-[var(--muted)] mb-2.5 line-clamp-2 leading-relaxed">${escapeHtml(m.description || m.parameters)}</p>
+              <div class="space-y-1 text-[11px] bg-[var(--surface)] p-2 rounded border border-[var(--line)] mb-3">
+                <div class="flex justify-between">
+                  <span class="text-[var(--muted)]">Params:</span>
+                  <span class="font-mono text-[var(--text)]">${escapeHtml(m.parameters || '-')}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-[var(--muted)]">Quant / VRAM:</span>
+                  <span class="font-mono text-[var(--text)]">${escapeHtml(m.quant || '-')} &middot; ${escapeHtml(m.vram_requirement || '-')}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-[var(--muted)]">Context:</span>
+                  <span class="font-mono text-[var(--accent)] font-semibold">${escapeHtml(ctx)}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-[var(--muted)]">Est. Speed:</span>
+                  <span class="font-mono text-[var(--ok)]">${escapeHtml(m.speed || '-')}</span>
+                </div>
+              </div>
+            </div>
+            <div class="pt-1">
+              ${actionBtnHtml}
+            </div>
+          </div>
+        `;
+      });
+
+      grid.innerHTML = html;
     }
 
     // ── Status & State ──────────────────────────────────────────
@@ -684,7 +966,16 @@
         badge.classList.add('pill-neutral');
       }
 
-      document.getElementById('elapsedBadge').innerText = (data.elapsed_seconds || 0) + 's';
+      // Sync live timer epoch
+      const st = (data.status || 'IDLE').toLowerCase();
+      const active = st !== 'idle' && st !== 'error';
+      isEngineActive = active;
+      if (active && (data.elapsed_seconds !== undefined && data.elapsed_seconds !== null)) {
+        launchEpochMs = Date.now() - (data.elapsed_seconds * 1000);
+      } else if (!active) {
+        launchEpochMs = null;
+      }
+      tickLiveTimer();
 
       // Upstream Tunnel
       const tunnel = data.tunnel_url || '';
@@ -708,7 +999,7 @@
         let html = '';
         data.available_models.forEach(m => {
           modelSpecs[m.id] = m;
-          const isActive = m.id === (data.active_model_id || 'cybertiel-coder-35b-a3b');
+          const isActive = m.id === currentSelectedModelId;
           const ctxDisplay = m.context_display || ((m.context_length || 32768).toLocaleString() + ' tok');
           html += `
             <div class="custom-dropdown-item ${isActive ? 'active' : ''}" data-id="${m.id}" onclick="selectModelOption('${m.id}', '${m.name}')">
@@ -723,14 +1014,22 @@
         menu.innerHTML = html;
       }
 
-      if (data.active_model_id) {
-        document.getElementById('modelSelectVal').value = data.active_model_id;
-        const currentSpec = modelSpecs[data.active_model_id];
+      if (data.active_model_id && !currentSelectedModelId) {
+        currentSelectedModelId = data.active_model_id;
+      }
+
+      if (currentSelectedModelId) {
+        document.getElementById('modelSelectVal').value = currentSelectedModelId;
+        const currentSpec = modelSpecs[currentSelectedModelId] || modelSpecs[data.active_model_id];
         if (currentSpec) {
           document.getElementById('modelDropdownLabel').innerText = currentSpec.name;
         }
-        updateSpecDetails(data.active_model_id);
+        updateSpecDetails(currentSelectedModelId);
       }
+
+      // Update buttons and model cards
+      updateLaunchAndStopButtons(data);
+      renderModelCards(data);
 
       // Logs
       if (data.recent_logs && data.recent_logs.length > 0) {
@@ -757,14 +1056,26 @@
         document.getElementById('specKvCache').innerText = spec.kv_cache || 'q4_0 / q4_0';
       }
       document.getElementById('specSpeed').innerText = spec.speed || '-';
+
+      // Update Bottom Specs Bar
+      if (document.getElementById('bottomVramDemand')) {
+        document.getElementById('bottomVramDemand').innerText = spec.vram_requirement || '24.8 GB / 32 GB';
+      }
+      if (document.getElementById('bottomContextLength')) {
+        document.getElementById('bottomContextLength').innerText = spec.context_display || ((spec.context_length || 32768).toLocaleString() + ' tokens');
+      }
+      if (document.getElementById('bottomKvCache')) {
+        document.getElementById('bottomKvCache').innerText = (spec.kv_cache || 'q4_0 / q4_0') + ' (-np 1 single slot)';
+      }
     }
 
     async function launchKernel() {
-      const id = document.getElementById('modelSelectVal').value;
+      const id = currentSelectedModelId || document.getElementById('modelSelectVal').value;
       const btn = document.getElementById('launchBtn');
       const txt = document.getElementById('launchBtnText');
       txt.innerText = 'Deploying...';
       btn.disabled = true;
+      btn.classList.add('opacity-50', 'cursor-not-allowed');
       try {
         const res = await fetch('/api/kaggle/launch', {
           method: 'POST',
@@ -776,8 +1087,24 @@
       } catch (e) {
         alert('Launch failed: ' + e);
       } finally {
-        txt.innerText = 'Launch on Kaggle';
-        btn.disabled = false;
+        if (activeState) updateLaunchAndStopButtons(activeState);
+      }
+    }
+
+    async function stopKernel() {
+      const btn = document.getElementById('stopBtn');
+      const txt = document.getElementById('stopBtnText');
+      txt.innerText = 'Stopping...';
+      btn.disabled = true;
+      btn.classList.add('opacity-50', 'cursor-not-allowed');
+      try {
+        const res = await fetch('/api/kernel/stop', { method: 'POST' });
+        const d = await res.json();
+        fetchStatus();
+      } catch (e) {
+        alert('Stop failed: ' + e);
+      } finally {
+        txt.innerText = 'Stop Engine';
       }
     }
 
@@ -915,6 +1242,7 @@
     loadCredentials();
     fetchStatus();
     setInterval(fetchStatus, 3000);
+    setInterval(tickLiveTimer, 1000);
   </script>
 </body>
 </html>

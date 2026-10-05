@@ -23,6 +23,7 @@ MODELS = {
         "rank": 1,
         "description": "State-of-the-art offensive/defensive cybersecurity & agentic coding model. Zero refusals on HarmBench (all categories). Calibrated on Exploit-DB, HackTricks, PayloadsAllTheThings and Cybench CTFs. Scaled to 262k context (~2.75 lakh) via YaRN RoPE scale 8 with q4_0 KV cache.",
         "server_args": [
+            "-np", "1",
             "--rope-scaling", "yarn",
             "--rope-scale", "8",
             "--yarn-orig-ctx", "32768",
@@ -55,6 +56,7 @@ MODELS = {
         "rank": 2,
         "description": "Latest Generation Alibaba Qwen3.8 model. ARA-refined 3x triple-pass abliterated (0 refusals on security tasks). Scaled to 262k context via YaRN RoPE scale 8 with q4_0 KV cache on Dual T4.",
         "server_args": [
+            "-np", "1",
             "--rope-scaling", "yarn",
             "--rope-scale", "8",
             "--yarn-orig-ctx", "32768",
@@ -87,6 +89,7 @@ MODELS = {
         "rank": 3,
         "description": "Specialized coding powerhouse with refusal vector ablation. HumanEval ~90%. Scaled to 131k context via YaRN RoPE scale 4 with q4_0 KV cache on Dual T4.",
         "server_args": [
+            "-np", "1",
             "--rope-scaling", "yarn",
             "--rope-scale", "4",
             "--yarn-orig-ctx", "32768",
@@ -119,6 +122,7 @@ MODELS = {
         "rank": 4,
         "description": "Maximum parameter reasoning giant. IQ3_M quant with scaled 65k context and q4_0 KV cache across Dual T4 VRAM.",
         "server_args": [
+            "-np", "1",
             "--rope-scaling", "yarn",
             "--rope-scale", "2",
             "--yarn-orig-ctx", "32768",

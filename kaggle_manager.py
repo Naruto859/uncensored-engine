@@ -420,6 +420,10 @@ while True:
                 if "running" in status_text.lower():
                     if self.status in ["initializing", "downloading"]:
                         self.set_status("loading_vram", "Kernel is running on Kaggle! Loading model & tunnel...")
+                elif any(w in status_text.lower() for w in ["cancel", "canceled", "cancelled"]):
+                    self.set_status("idle", f"Kernel run cancelled: {status_text}")
+                    self.tunnel_url = ""
+                    break
                 elif "error" in status_text.lower():
                     self.set_status("error", f"Kernel error on Kaggle: {status_text}")
                     break
@@ -468,6 +472,90 @@ while True:
         if self.launch_time:
             return int(time.time() - self.launch_time)
         return 0
+
+    def stop_kernel(self) -> Dict[str, Any]:
+        """
+        Stops the active Kaggle kernel to conserve GPU quota,
+        terminates background polling, tears down tunnel, and resets status to idle.
+        """
+        self.log("Received Stop Engine request. Initiating shutdown...")
+        # 1. Stop background polling thread immediately
+        self._stop_polling.set()
+        if self._polling_thread and self._polling_thread.is_alive():
+            self._polling_thread.join(timeout=2)
+
+        # 2. Reset active tunnel and elapsed time
+        self.tunnel_url = ""
+        self.launch_time = None
+        self.set_status("idle", "Engine stopped by operator. GPU quota conserved.")
+
+        # 3. Stop/cancel kernel on Kaggle
+        kaggle_bin = str(KAGGLE_VENV_BIN) if KAGGLE_VENV_BIN.exists() else "kaggle"
+        username = self.load_kaggle_credentials().get("username", "samirandas22")
+        kernel_ref = f"{username}/hermes-uncensored-engine"
+
+        stopped_via_cli = False
+        for cmd_verb in ["stop", "cancel"]:
+            try:
+                res = subprocess.run(
+                    [kaggle_bin, "kernels", cmd_verb, kernel_ref],
+                    env=self.get_subprocess_env(),
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if res.returncode == 0:
+                    self.log(f"Kaggle kernel stopped via CLI '{cmd_verb}': {res.stdout.strip()}")
+                    stopped_via_cli = True
+                    break
+            except Exception:
+                pass
+
+        if not stopped_via_cli:
+            try:
+                self.log("Pushing cancellation script to release Kaggle GPU resource...")
+                stop_dir = Path("/root/uncensored-manager/stop_bundle")
+                stop_dir.mkdir(parents=True, exist_ok=True)
+
+                stop_script = (
+                    "#!/usr/bin/env python3\\n"
+                    "# Autonomous Uncensored Engine - Shutdown Sentinel\\n"
+                    "import sys\\n"
+                    "print('[SHUTDOWN] Engine stop requested by operator. Releasing GPU.')\\n"
+                    "sys.exit(0)\\n"
+                )
+                (stop_dir / "kernel.py").write_text(stop_script, encoding="utf-8")
+
+                metadata = {
+                    "id": kernel_ref,
+                    "title": "Hermes Uncensored Engine",
+                    "code_file": "kernel.py",
+                    "language": "python",
+                    "kernel_type": "script",
+                    "is_private": True,
+                    "enable_gpu": False,
+                    "enable_tpu": False,
+                    "enable_internet": False,
+                    "dataset_sources": [],
+                    "competition_sources": [],
+                    "kernel_sources": [],
+                    "model_sources": []
+                }
+                (stop_dir / "kernel-metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+                cmd = [kaggle_bin, "kernels", "push", "-p", str(stop_dir)]
+                res = subprocess.run(cmd, env=self.get_subprocess_env(), capture_output=True, text=True, timeout=30)
+                if res.returncode == 0:
+                    self.log("Kaggle run preempted & cancelled. Active GPU session terminated.")
+                else:
+                    self.log(f"Notice: Push stop script returned code {res.returncode}: {res.stderr.strip()}")
+            except Exception as e:
+                self.log(f"Stop kernel push exception: {e}")
+
+        if self.config_callback:
+            self.config_callback()
+
+        return {"success": True, "status": self.status, "message": "Engine stopped and tunnel torn down."}
 
     def get_state(self) -> Dict[str, Any]:
         effective_status = "ready" if self.tunnel_url else self.status

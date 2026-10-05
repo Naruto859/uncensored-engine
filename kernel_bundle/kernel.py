@@ -123,6 +123,7 @@ print("\n[STEP 4] Launching llama-server in background with GPU offloading...")
 server_cmd = [
     LLAMA_SERVER,
     "-m", model_path,
+    "-np", "1",
     "--rope-scaling", "yarn", "--rope-scale", "8", "--yarn-orig-ctx", "32768", "-c", "262144", "-ctk", "q4_0", "-ctv", "q4_0", "-ngl", "52", "-sm", "layer", "-ts", "1,1", "-b", "2048", "-ub", "512", "-fa", "auto", "--threads", "4"
 ]
 

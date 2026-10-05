@@ -1,8 +1,8 @@
 {
   "active_model_id": "cybertiel-coder-35b-a3b",
-  "tunnel_url": "https://par-ash-guests-hampton.trycloudflare.com",
+  "tunnel_url": "",
   "tunnel_type": "cloudflare",
-  "status": "loading_vram",
+  "status": "idle",
   "mock_mode": false,
   "kaggle_proxy": "server"
 }

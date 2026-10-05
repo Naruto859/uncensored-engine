@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -106,6 +107,13 @@ async def launch_kaggle(req: Request):
     if model_id not in MODELS:
         raise HTTPException(status_code=400, detail="Invalid model_id")
     res = manager.push_kernel(model_id)
+    sync_config()
+    return res
+
+@app_manager.post("/api/kernel/stop")
+@app_manager.post("/api/kaggle/stop")
+async def stop_kaggle():
+    res = manager.stop_kernel()
     sync_config()
     return res
 
@@ -463,19 +471,23 @@ async def chat_completions(request: Request):
         raise HTTPException(status_code=502, detail=f"Failed to communicate with Kaggle upstream: {e}")
 
 @app_forwarder.post("/v1/messages")
+@app_forwarder.post("/messages")
 async def anthropic_messages_compat(request: Request):
     """
-    Compatibility layer for Anthropic Messages API.
-    Translates Anthropic JSON into OpenAI chat completions format.
+    Native compatibility layer for Anthropic Messages API (/v1/messages).
+    Translates Anthropic Messages payload into llama-server chat format,
+    handling both non-streaming responses and live Server-Sent Events (SSE) streaming
+    (message_start, content_block_start, content_block_delta, content_block_stop, message_delta, message_stop).
     """
     body = await request.json()
+    is_stream = bool(body.get("stream", False))
     messages = []
     
     # Convert system prompt
     if "system" in body and body["system"]:
         sys_content = body["system"]
         if isinstance(sys_content, list):
-            sys_text = "\n".join([item.get("text", "") for item in sys_content if isinstance(item, dict)])
+            sys_text = "\n".join([item.get("text", "") for item in sys_content if isinstance(item, dict) and item.get("type") == "text"])
         else:
             sys_text = str(sys_content)
         messages.append({"role": "system", "content": sys_text})
@@ -489,52 +501,207 @@ async def anthropic_messages_compat(request: Request):
             content = "\n".join(text_parts)
         messages.append({"role": role, "content": content})
         
+    model_name = body.get("model", manager.active_model_id)
     openai_body = {
-        "model": body.get("model", manager.active_model_id),
+        "model": model_name,
         "messages": messages,
         "temperature": body.get("temperature", 0.7),
         "max_tokens": body.get("max_tokens", 4096),
-        "stream": body.get("stream", False)
+        "stream": is_stream
     }
-    
-    # Mock mode or proxy
+    if "top_p" in body:
+        openai_body["top_p"] = body["top_p"]
+    if "stop_sequences" in body:
+        openai_body["stop"] = body["stop_sequences"]
+
+    msg_id = f"msg_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+
+    # A. Mock Mode Handling
     if mock_mode:
         mock_data = generate_mock_completion(openai_body)
         assistant_content = mock_data["choices"][0]["message"]["content"]
+        
+        if is_stream:
+            async def sse_anthropic_mock():
+                # 1. message_start
+                start_event = {
+                    "type": "message_start",
+                    "message": {
+                        "id": msg_id,
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [],
+                        "model": model_name,
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 42, "output_tokens": 1}
+                    }
+                }
+                yield f"event: message_start\ndata: {json.dumps(start_event)}\n\n"
+                
+                # 2. content_block_start
+                block_start = {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""}
+                }
+                yield f"event: content_block_start\ndata: {json.dumps(block_start)}\n\n"
+                
+                # 3. content_block_delta
+                words = assistant_content.split(" ")
+                for word in words:
+                    delta_event = {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {"type": "text_delta", "text": word + " "}
+                    }
+                    yield f"event: content_block_delta\ndata: {json.dumps(delta_event)}\n\n"
+                    await asyncio.sleep(0.02)
+                    
+                # 4. content_block_stop
+                block_stop = {"type": "content_block_stop", "index": 0}
+                yield f"event: content_block_stop\ndata: {json.dumps(block_stop)}\n\n"
+                
+                # 5. message_delta
+                msg_delta = {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                    "usage": {"output_tokens": len(words) + 5}
+                }
+                yield f"event: message_delta\ndata: {json.dumps(msg_delta)}\n\n"
+                
+                # 6. message_stop
+                yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
+
+            return StreamingResponse(sse_anthropic_mock(), media_type="text/event-stream")
+
         return JSONResponse({
-            "id": f"msg_mock_{int(time.time())}",
+            "id": msg_id,
             "type": "message",
             "role": "assistant",
+            "model": model_name,
             "content": [{"type": "text", "text": assistant_content}],
-            "model": openai_body["model"],
             "stop_reason": "end_turn",
             "stop_sequence": None,
-            "usage": {"input_tokens": 40, "output_tokens": 120}
+            "usage": {"input_tokens": 42, "output_tokens": 128}
         })
-        
+
+    # B. Target Tunnel Verification
     target_tunnel = manager.tunnel_url
     if not target_tunnel:
-        raise HTTPException(status_code=503, detail="Kaggle Upstream Tunnel Not Active")
-        
-    async with httpx.AsyncClient(timeout=3600.0) as client:
-        resp = await client.post(f"{target_tunnel}/v1/chat/completions", json=openai_body)
-        if resp.status_code != 200:
-            return Response(content=resp.content, status_code=resp.status_code)
-        resp_json = resp.json()
-        assistant_content = resp_json["choices"][0]["message"]["content"]
+        status_msg = (
+            f"[STATUS] Kaggle Uncensored Engine is currently {manager.status.upper()} ({manager.status_detail}).\n\n"
+            f"Active Model: {manager.active_model_id}\n"
+            f"Dashboard: http://100.79.64.124:8778/\n\n"
+            f"Please launch the kernel on Kaggle or enable mock verification mode."
+        )
+        if is_stream:
+            async def sse_anthropic_status():
+                yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': {'id': msg_id, 'type': 'message', 'role': 'assistant', 'content': [], 'model': model_name, 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': 10, 'output_tokens': 1}}})}\n\n"
+                yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
+                for word in status_msg.split(" "):
+                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}})}\n\n"
+                    await asyncio.sleep(0.01)
+                yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': 0})}\n\n"
+                yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': 'end_turn', 'stop_sequence': None}, 'usage': {'output_tokens': 40}})}\n\n"
+                yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
+
+            return StreamingResponse(sse_anthropic_status(), media_type="text/event-stream")
+
         return JSONResponse({
-            "id": f"msg_{int(time.time())}",
+            "id": msg_id,
             "type": "message",
             "role": "assistant",
-            "content": [{"type": "text", "text": assistant_content}],
-            "model": openai_body["model"],
+            "model": model_name,
+            "content": [{"type": "text", "text": status_msg}],
             "stop_reason": "end_turn",
             "stop_sequence": None,
-            "usage": {
-                "input_tokens": resp_json.get("usage", {}).get("prompt_tokens", 50),
-                "output_tokens": resp_json.get("usage", {}).get("completion_tokens", 100)
-            }
+            "usage": {"input_tokens": 10, "output_tokens": 40}
         })
+
+    # C. Live Tunnel Proxying
+    upstream_url = f"{target_tunnel}/v1/chat/completions"
+    if is_stream:
+        async def sse_anthropic_proxy():
+            client = httpx.AsyncClient(timeout=3600.0)
+            try:
+                async with client.stream("POST", upstream_url, json=openai_body) as response:
+                    if response.status_code != 200:
+                        err_bytes = await response.aread()
+                        err_text = f"Upstream error {response.status_code}: {err_bytes.decode(errors='ignore')}"
+                        yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': {'id': msg_id, 'type': 'message', 'role': 'assistant', 'content': [], 'model': model_name, 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': 10, 'output_tokens': 1}}})}\n\n"
+                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
+                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': err_text}})}\n\n"
+                        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': 0})}\n\n"
+                        yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': 'error', 'stop_sequence': None}, 'usage': {'output_tokens': 10}})}\n\n"
+                        yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
+                        return
+
+                    # 1. message_start
+                    yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': {'id': msg_id, 'type': 'message', 'role': 'assistant', 'content': [], 'model': model_name, 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': 50, 'output_tokens': 1}}})}\n\n"
+                    # 2. content_block_start
+                    yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
+
+                    out_token_est = 0
+                    async for line in response.aiter_lines():
+                        if not line or not line.strip():
+                            continue
+                        line = line.strip()
+                        if line.startswith("data: "):
+                            raw_data = line[6:].strip()
+                            if raw_data == "[DONE]":
+                                break
+                            try:
+                                cjson = json.loads(raw_data)
+                                choices = cjson.get("choices", [])
+                                if choices:
+                                    delta = choices[0].get("delta", {})
+                                    delta_text = delta.get("content", "")
+                                    if delta_text:
+                                        out_token_est += 1
+                                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': delta_text}})}\n\n"
+                            except Exception:
+                                pass
+
+                    # 3. content_block_stop
+                    yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': 0})}\n\n"
+                    # 4. message_delta
+                    yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': 'end_turn', 'stop_sequence': None}, 'usage': {'output_tokens': max(1, out_token_est)}})}\n\n"
+                    # 5. message_stop
+                    yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
+            except Exception as e:
+                logger.error(f"Error in SSE Anthropic proxy to {upstream_url}: {e}")
+            finally:
+                await client.aclose()
+
+        return StreamingResponse(sse_anthropic_proxy(), media_type="text/event-stream")
+
+    # Non-streaming Live Proxy
+    async with httpx.AsyncClient(timeout=3600.0) as client:
+        try:
+            resp = await client.post(upstream_url, json=openai_body)
+            if resp.status_code != 200:
+                return Response(content=resp.content, status_code=resp.status_code)
+            resp_json = resp.json()
+            assistant_content = resp_json["choices"][0]["message"]["content"]
+            finish_reason = resp_json["choices"][0].get("finish_reason", "stop")
+            stop_reason = "max_tokens" if finish_reason == "length" else "end_turn"
+            return JSONResponse({
+                "id": msg_id,
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": assistant_content}],
+                "model": model_name,
+                "stop_reason": stop_reason,
+                "stop_sequence": None,
+                "usage": {
+                    "input_tokens": resp_json.get("usage", {}).get("prompt_tokens", 50),
+                    "output_tokens": resp_json.get("usage", {}).get("completion_tokens", 100)
+                }
+            })
+        except Exception as e:
+            logger.error(f"Error proxying Anthropic non-streaming request to {upstream_url}: {e}")
+            raise HTTPException(status_code=502, detail=f"Failed to communicate with Kaggle upstream: {e}")
 
 # ==============================================================================
 # Dual Server Runner
